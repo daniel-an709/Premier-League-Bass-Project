@@ -14,7 +14,7 @@ However, the strength of this advantage was not constant across seasons.
 
 ![Home win rate across seasons](figures/home_win_rate_by_season.png)
 
-Across complete seasons, the home-win rate fluctuated around an overall average of approximately **46.1%**. Some seasons differed substantially from this average, with **2020/21** showing an especially low home-win rate. This indicates that home advantage may depend on season-specific conditions rather than remaining constant over time.
+Across complete seasons, the home-win rate fluctuated around an overall average of approximately **46.1%**. Some seasons differed substantially from this average, with **2020/21** showing an especially low home-win rate. While this is likely due to matches being affected by COVID-19, it broadly indicates that home advantage may depend on season-specific conditions rather than remaining constant over time.
 
 ## 2. Match performance associated with winning
 
@@ -28,7 +28,7 @@ Discipline was also related to match outcomes.
 
 ![Match outcome by red card status](figures/redcard_outcome.png)
 
-Teams receiving at least one red card lost approximately **55.03%** of their matches and won only **19.52%**. In comparison, teams without a red card lost **36.34%** and won **39.06%**. This is a strong association, although it should not be interpreted as causal because match state may also influence the likelihood of receiving a red card.
+Teams receiving at least one red card lost approximately **55.03%** of their matches and won only **19.52%**. In comparison, teams without a red card lost **36.34%** and won **39.06%**. This is a strong association, although it should not be interpreted as causal because game state and especially the players' own mental state may also influence the likelihood of receiving a red card.
 
 The correlation analysis provides a broader comparison across in-match statistics.
 
