@@ -176,25 +176,58 @@ def evaluate_holdout(
     return pd.DataFrame(rows)
 
 
-def main() -> None:
-    df = load_features()
-    train, test = split_by_season(df)
-
-    cols = feature_columns(train, "diff")
-    y_train, y_test = get_target(train), get_target(test)
+# 5. ---Run everything---
+def run_all(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    framings: tuple[str, ...] = ("diff", "levels"),
+    targets: tuple[str, ...] = ("binary", "multiclass"),
+) -> pd.DataFrame:
+    """Score every model on each feature framing and each target, in one table."""
     models = build_models()
+    frames = []
 
-    cv = cross_validate_models(models, train[cols], y_train, "binary")
+    for target in targets:
+        y_train, y_test = get_target(train, target), get_target(test, target)
+
+        for framing in framings:
+            cols = feature_columns(train, framing)
+            print(f"  {target} / {framing} ({len(cols)} features)")
+
+            cv = cross_validate_models(models, train[cols], y_train, target)
+            cv = cv.rename(columns=lambda c: c if c == "Model" else f"CV{c}")
+            holdout = evaluate_holdout(
+                models, train[cols], y_train, test[cols], y_test, target
+            )
+
+            merged = cv.merge(holdout, on="Model")
+            merged.insert(0, "Target", target)
+            merged.insert(1, "Framing", framing)
+            frames.append(merged)
+
+    return pd.concat(frames, ignore_index=True)
+
+
+def main() -> None:
+    train, test = split_by_season(load_features())
+
     print()
-    print("Cross-validation (diff / binary)")
-    print(cv.round(3).to_string(index=False))
+    print("Fitting")
+    results = run_all(train, test)
+    results.to_csv(RESULTS_PATH, index=False)
 
-    holdout = evaluate_holdout(
-        models, train[cols], y_train, test[cols], y_test, "binary"
+    summary = ["Target", "Framing", "Model", "CVLogLoss", "CVAUC",
+               "HoldoutLogLoss", "HoldoutAUC", "HoldoutAccuracy"]
+    print()
+    print("Results (sorted by holdout log loss)")
+    print(
+        results[summary]
+        .sort_values(["Target", "HoldoutLogLoss"])
+        .round(3)
+        .to_string(index=False)
     )
     print()
-    print("Holdout (diff / binary)")
-    print(holdout.round(3).to_string(index=False))
+    print(f"Wrote {RESULTS_PATH} ({len(results)} rows)")
 
 
 if __name__ == "__main__":
