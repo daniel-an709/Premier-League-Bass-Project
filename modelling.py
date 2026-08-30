@@ -10,6 +10,7 @@ Run: python modelling.py
 
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import (
     HistGradientBoostingClassifier,
@@ -17,6 +18,13 @@ from sklearn.ensemble import (
 )
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    brier_score_loss,
+    log_loss,
+    roc_auc_score,
+)
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
@@ -97,10 +105,96 @@ def build_models(random_state: int = RANDOM_STATE) -> dict:
     }
 
 
+# 4. ---Evaluation---
+def score(model, X: pd.DataFrame, y: pd.Series, target: str) -> dict[str, float]:
+    """Score one fitted model. Probability metrics first, accuracy last.
+
+    Match outcomes are genuinely uncertain, so how well the predicted
+    probabilities are calibrated matters more than how often the argmax is right.
+    """
+    proba = model.predict_proba(X)
+    labels = list(model.classes_)
+
+    if target == "binary":
+        p = proba[:, 1]
+        log, brier = log_loss(y, p), brier_score_loss(y, p)
+        auc = roc_auc_score(y, p)
+    else:
+        log = log_loss(y, proba, labels=labels)
+        brier = brier_score_loss(y, proba, labels=labels)
+        auc = roc_auc_score(y, proba, multi_class="ovr", average="macro", labels=labels)
+
+    return {
+        "LogLoss": log,
+        "Brier": brier,
+        "AUC": auc,
+        "Accuracy": accuracy_score(y, model.predict(X)),
+    }
+
+
+def cross_validate_models(
+    models: dict,
+    X: pd.DataFrame,
+    y: pd.Series,
+    target: str,
+    n_splits: int = N_SPLITS,
+) -> pd.DataFrame:
+    """Mean scores over expanding time-ordered folds of the training seasons."""
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    rows = []
+    for name, model in models.items():
+        folds = [
+            score(clone(model).fit(X.iloc[tr], y.iloc[tr]), X.iloc[va], y.iloc[va], target)
+            for tr, va in tscv.split(X)
+        ]
+        rows.append({"Model": name, **pd.DataFrame(folds).mean().to_dict()})
+    return pd.DataFrame(rows)
+
+
+def evaluate_holdout(
+    models: dict,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    target: str,
+) -> pd.DataFrame:
+    """Fit on all training seasons, then score on train and holdout side by side.
+
+    Both are reported so that overfitting can be seen in the table.
+    """
+    rows = []
+    for name, model in models.items():
+        fitted = clone(model).fit(X_train, y_train)
+        train = score(fitted, X_train, y_train, target)
+        holdout = score(fitted, X_test, y_test, target)
+        rows.append({
+            "Model": name,
+            **{f"Train{k}": v for k, v in train.items()},
+            **{f"Holdout{k}": v for k, v in holdout.items()},
+        })
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     df = load_features()
     train, test = split_by_season(df)
-    print(f"Models: {', '.join(build_models())}")
+
+    cols = feature_columns(train, "diff")
+    y_train, y_test = get_target(train), get_target(test)
+    models = build_models()
+
+    cv = cross_validate_models(models, train[cols], y_train, "binary")
+    print()
+    print("Cross-validation (diff / binary)")
+    print(cv.round(3).to_string(index=False))
+
+    holdout = evaluate_holdout(
+        models, train[cols], y_train, test[cols], y_test, "binary"
+    )
+    print()
+    print("Holdout (diff / binary)")
+    print(holdout.round(3).to_string(index=False))
 
 
 if __name__ == "__main__":
