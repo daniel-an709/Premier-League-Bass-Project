@@ -8,9 +8,13 @@ binary and three-class models can share one pipeline.
 Run: python modelling.py
 """
 
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
+from sklearn.calibration import calibration_curve
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import (
     HistGradientBoostingClassifier,
@@ -24,6 +28,7 @@ from sklearn.metrics import (
     log_loss,
     roc_auc_score,
 )
+from sklearn.inspection import permutation_importance
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -32,6 +37,11 @@ from sklearn.tree import DecisionTreeClassifier
 # Metadata
 FEATURES_PATH = "epl_features.csv"
 RESULTS_PATH = "model_results.csv"
+FIGURE_DIR = Path("figures")
+
+# Same Material palette as EDA.py, so the figures in EDA.md and MODELLING.md
+# read as one set.
+BLUE, RED, GREEN, GREY = "#64B5F6", "#E57373", "#81C784", "gray"
 
 HOLDOUT_SEASONS = ["2022/23", "2023/24", "2024/25"]
 RANDOM_STATE = 42
@@ -208,8 +218,112 @@ def run_all(
     return pd.concat(frames, ignore_index=True)
 
 
+# 6. ---Figures---
+def plot_calibration(fitted: dict, X: pd.DataFrame, y: pd.Series) -> None:
+    """Reliability diagram: predicted probability against observed frequency."""
+    plt.figure(figsize=(7, 6))
+    plt.plot([0, 1], [0, 1], "--", color=GREY, linewidth=1, label="Perfect calibration")
+
+    for name, model in fitted.items():
+        prob = model.predict_proba(X)[:, 1]
+        observed, predicted = calibration_curve(y, prob, n_bins=10, strategy="quantile")
+        plt.plot(predicted, observed, marker="o", label=name,
+                 color=dict(zip(fitted, (BLUE, RED, GREEN)))[name])
+
+    plt.title("Calibration of Predicted Home-Win Probability (holdout)")
+    plt.xlabel("Mean predicted probability")
+    plt.ylabel("Observed home-win rate")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIGURE_DIR / "calibration_binary.png", dpi=300)
+    plt.close()
+
+
+def plot_permutation_importance(model, X: pd.DataFrame, y: pd.Series) -> None:
+    """Permutation importance on the holdout, not impurity importance.
+
+    Several features correlate above r = 0.8, and impurity importance splits
+    credit between correlated features arbitrarily.
+    """
+    result = permutation_importance(
+        model, X, y, scoring="roc_auc", n_repeats=20, random_state=RANDOM_STATE
+    )
+    order = result.importances_mean.argsort()
+
+    plt.figure(figsize=(9, 7))
+    plt.barh(
+        [X.columns[i] for i in order],
+        result.importances_mean[order],
+        xerr=result.importances_std[order],
+        color=BLUE,
+    )
+    plt.axvline(0, color=GREY, linewidth=1)
+    plt.title("Permutation Importance (drop in holdout AUC)")
+    plt.xlabel("Mean decrease in ROC AUC")
+    plt.tight_layout()
+    plt.savefig(FIGURE_DIR / "permutation_importance.png", dpi=300)
+    plt.close()
+
+
+def accuracy_by_season(df: pd.DataFrame, model, framing: str = "diff") -> pd.DataFrame:
+    """Walk forward one season at a time, training only on earlier seasons."""
+    cols = feature_columns(df, framing)
+    seasons = sorted(df["Season"].unique())
+    rows = []
+
+    for season in seasons[5:]:
+        past, current = df[df["Season"] < season], df[df["Season"] == season]
+        fitted = clone(model).fit(past[cols], past["HomeWin"])
+        prob = fitted.predict_proba(current[cols])[:, 1]
+        rows.append({
+            "Season": season,
+            "AUC": roc_auc_score(current["HomeWin"], prob),
+            "Accuracy": accuracy_score(current["HomeWin"], fitted.predict(current[cols])),
+            "HomeWinRate": current["HomeWin"].mean(),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def plot_accuracy_by_season(scores: pd.DataFrame) -> None:
+    """Walk-forward performance per season, against that season's home-win rate."""
+    plt.figure(figsize=(11, 5))
+    plt.plot(scores["Season"], scores["AUC"], marker="o", color=BLUE, label="AUC")
+    plt.plot(scores["Season"], scores["Accuracy"], marker="o", color=GREEN,
+             label="Accuracy")
+    plt.plot(scores["Season"], scores["HomeWinRate"], marker="o", color=RED,
+             linestyle="--", label="Home-win rate (base rate)")
+
+    plt.title("Walk-Forward Performance by Season")
+    plt.xlabel("Season")
+    plt.ylabel("Score")
+    plt.xticks(rotation=45)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIGURE_DIR / "accuracy_by_season.png", dpi=300)
+    plt.close()
+
+
+def build_figures(df: pd.DataFrame, train: pd.DataFrame, test: pd.DataFrame) -> None:
+    """Fit the models once more on the training seasons and draw every figure."""
+    FIGURE_DIR.mkdir(exist_ok=True)
+    cols = feature_columns(train, "diff")
+    y_train, y_test = train["HomeWin"], test["HomeWin"]
+
+    models = build_models()
+    fitted = {
+        name: clone(models[name]).fit(train[cols], y_train)
+        for name in ("LogisticRegression", "RandomForest", "HistGradientBoosting")
+    }
+
+    plot_calibration(fitted, test[cols], y_test)
+    plot_permutation_importance(fitted["LogisticRegression"], test[cols], y_test)
+    plot_accuracy_by_season(accuracy_by_season(df, models["LogisticRegression"]))
+
+
 def main() -> None:
-    train, test = split_by_season(load_features())
+    df = load_features()
+    train, test = split_by_season(df)
 
     print()
     print("Fitting")
@@ -226,7 +340,11 @@ def main() -> None:
         .round(3)
         .to_string(index=False)
     )
+
     print()
+    print("Figures")
+    build_figures(df, train, test)
+    print(f"  wrote 3 figures to {FIGURE_DIR}/")
     print(f"Wrote {RESULTS_PATH} ({len(results)} rows)")
 
 
