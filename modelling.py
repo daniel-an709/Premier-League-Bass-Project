@@ -10,6 +10,16 @@ Run: python modelling.py
 
 import numpy as np
 import pandas as pd
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import (
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier
 
 # Metadata
 FEATURES_PATH = "epl_features.csv"
@@ -54,10 +64,44 @@ def get_target(df: pd.DataFrame, target: str = "binary") -> pd.Series:
     """Return the binary home-win column or the three-way result."""
     return df["HomeWin"] if target == "binary" else df["Result"]
 
+
+# 3. ---Models---
+def build_models(random_state: int = RANDOM_STATE) -> dict:
+    """Five models, in increasing order of what they are allowed to learn."""
+    return {
+        # Predicts the class base rates. The floor every other model must clear.
+        "Baseline": DummyClassifier(strategy="prior", random_state=random_state),
+
+        # Same pipeline as EDA.py, so we can compare results to EDA.md.
+        # The only model here that needs imputing and scaling.
+        "LogisticRegression": Pipeline([
+            ("impute", SimpleImputer(strategy="median")),
+            ("scale", StandardScaler()),
+            ("model", LogisticRegression(max_iter=1000)),
+        ]),
+
+        # Left unconstrained on purpose: the expected gap between its train and holdout
+        # scores supports the following two ensembles
+        "DecisionTree": DecisionTreeClassifier(random_state=random_state),
+
+        "RandomForest": RandomForestClassifier(
+            n_estimators=500,
+            min_samples_leaf=5,
+            n_jobs=-1,
+            random_state=random_state,
+        ),
+
+        "HistGradientBoosting": HistGradientBoostingClassifier(
+            random_state=random_state,
+        ),
+    }
+
+
 def main() -> None:
     df = load_features()
-    for i, col in enumerate(df.columns):
-        print(f"{i}. {col}")
+    train, test = split_by_season(df)
+    print(f"Models: {', '.join(build_models())}")
+
 
 if __name__ == "__main__":
     main()
